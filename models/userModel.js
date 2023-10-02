@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 const validator = require('validator');
 const bcrypt = require('bcryptjs');
@@ -9,61 +10,106 @@ const userSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: [true, 'Please provide your email!'],
+    required: [true, 'Please provide your email'],
     unique: true,
     lowercase: true,
-    validate: [validator.isEmail, 'Please provide a valid email address']
+    validate: [validator.isEmail, 'Please provide a valid email']
   },
   photo: String,
+  role: {
+    type: String,
+    enum: ['user', 'guide', 'lead-guide', 'admin'],
+    default: 'user'
+  },
   password: {
     type: String,
-    require: [true, 'Please provide a password'],
+    required: [true, 'Please provide a password'],
     minlength: 8,
     select: false
   },
   passwordConfirm: {
     type: String,
-    requires: [true, 'Please confirm your password'],
+    required: [true, 'Please confirm your password'],
     validate: {
-      //this only works on CREATE AND  SAVE!!
-      validator: function (el) {
+      // This only works on CREATE and SAVE!!!
+      validator: function(el) {
         return el === this.password;
       },
-      message: 'Password are not the same'
+      message: 'Passwords are not the same!'
     }
   },
-  passwordChangedAt: Date
+  passwordChangedAt: Date,
+  passwordResetToken: String,
+  passwordResetExpires: Date,
+  active: {
+    type: Boolean,
+    default: true,
+    select: false
+  }
 });
 //this middleware runs between the data we get and store in database
-userSchema.pre('save', async function (next) {
-  //Only run this function if password was actually modified
+userSchema.pre('save', async function(next) {
+  // Only run this function if password was actually modified
   if (!this.isModified('password')) return next();
-  //Hash the password with cost of 12
+
+  // Hash the password with cost of 12
   this.password = await bcrypt.hash(this.password, 12);
-  //Delete the passwordConfirm field
+
+  // Delete passwordConfirm field
   this.passwordConfirm = undefined;
   next();
 });
+
+userSchema.pre('save', function(next) {
+  if (!this.isModified('password') || this.isNew) return next();
+
+  this.passwordChangedAt = Date.now() - 1000;
+  next();
+});
+
+userSchema.pre(/^find/, function(next) {
+  // this points to the current query
+  this.find({ active: { $ne: false } });
+  next();
+});
 //this below function is used to check the encrypted password is crt or not by using the bcrypt funtion to check both encrypted on
-userSchema.methods.correctPassword = async function (
+userSchema.methods.correctPassword = async function(
   candidatePassword,
   userPassword
 ) {
-  return bcrypt.compare(candidatePassword, userPassword);
+  return await bcrypt.compare(candidatePassword, userPassword);
 };
+
 userSchema.methods.changedPasswordAfter = function(JWTTimestamp) {
   if (this.passwordChangedAt) {
-    //   const changedTimestamp = parseInt(
-    //     this.passwordChangedAt.getTime() / 1000,
-    //     10
-    //   );
-    //   //if the user has not changed their password then it will return false
-    console.log(this.passwordChangedAt, JWTTimestamp);
-    // return JWTTimestamp < changedTimestamp;
+    const changedTimestamp = parseInt(
+      this.passwordChangedAt.getTime() / 1000,
+      10
+    );
+    //if the user has not changed their password then it will return false
+    // console.log(this.passwordChangedAt, JWTTimestamp);
+    return JWTTimestamp < changedTimestamp;
   }
+
   //if the token was changed before the issue time then it will be false
   return false; //100<200
 };
 
+userSchema.methods.createPasswordResetToken = function() {
+  const resetToken = crypto.randomBytes(32).toString('hex');
+
+  this.passwordResetToken = crypto
+    .createHash('sha256')
+    .update(resetToken)
+    .digest('hex');
+
+  console.log({ resetToken }, this.passwordResetToken);
+
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000;
+
+  return resetToken;
+};
+
 const User = mongoose.model('User', userSchema);
+
 module.exports = User;
